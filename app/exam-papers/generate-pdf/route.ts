@@ -388,12 +388,16 @@ export async function POST(req: Request) {
   const pdfBytes = buildPdfFromLines(lines);
   const filename = `${safeFilename(paper.title)}.pdf`;
 
-  return new Response(pdfBytes, {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Cache-Control': 'no-store',
-    },
-  });
-}
+const body = pdfBytes.buffer.slice(
+  pdfBytes.byteOffset,
+  pdfBytes.byteOffset + pdfBytes.byteLength
+);
+
+return new Response(body, {
+  status: 200,
+  headers: {
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Cache-Control': 'no-store',
+  },
+});
