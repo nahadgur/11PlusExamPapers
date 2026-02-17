@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 export const runtime = 'nodejs';
 
 type ExamQuestion = {
@@ -340,17 +341,13 @@ export async function POST(req: Request) {
   const filename = `${safeFilename(paper.title)}.pdf`;
 
   // IMPORTANT: pass ArrayBuffer to Response to satisfy TS
-  const body = pdfBytes.buffer.slice(
-    pdfBytes.byteOffset,
-    pdfBytes.byteOffset + pdfBytes.byteLength
-  );
+const body = Buffer.from(pdfBytes);
 
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Cache-Control': 'no-store',
-    },
-  });
-}
+return new Response(body, {
+  status: 200,
+  headers: {
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Cache-Control': 'no-store',
+  },
+});
