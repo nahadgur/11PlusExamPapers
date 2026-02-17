@@ -19,13 +19,11 @@ type ExamPaper = {
 };
 
 function pdfStringEscape(s: string) {
-  // Escape backslashes and parentheses for PDF literal strings: ( ... )
   return s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
 
 function safeText(input: unknown, fallback = ''): string {
   if (typeof input !== 'string') return fallback;
-  // Strip CR to normalize; keep LF for wrapping logic.
   return input.replace(/\r/g, '');
 }
 
@@ -74,7 +72,6 @@ function buildPaperLines(paper: ExamPaper): Line[] {
 
   const lines: Line[] = [];
 
-  // Cover-style header (simple)
   lines.push({ text: '11 Plus Exam Papers', size: 16, bold: true });
   lines.push({ text: title, size: 18, bold: true });
   lines.push({ text: `${toTitleCase(subject)} • ${board} Style`, size: 12 });
@@ -111,7 +108,6 @@ function buildPaperLines(paper: ExamPaper): Line[] {
     lines.push({ text: '' });
   });
 
-  // Answer key
   lines.push({ text: 'Answer Key (Parents & Tutors)', size: 13, bold: true });
   lines.push({ text: '' });
 
@@ -130,38 +126,30 @@ function buildPaperLines(paper: ExamPaper): Line[] {
   return lines;
 }
 
-// Minimal PDF builder (text only, built-in Helvetica)
 function buildPdfFromLines(lines: Line[]): Uint8Array {
-  // A4 in points
   const PAGE_W = 595.28;
   const PAGE_H = 841.89;
 
   const M_LEFT = 48;
-  const M_RIGHT = 48;
   const M_TOP = 56;
   const M_BOTTOM = 56;
 
-  const MAX_CHARS_APPROX = 92; // used earlier for wrapping; keeps it readable
-
-  // Layout rules
   const defaultFontSize = 11;
   const lineGap = 3;
 
-  // Break into pages by vertical space
   type Page = { ops: string[] };
   const pages: Page[] = [];
 
   let y = PAGE_H - M_TOP;
   let current: Page = { ops: [] };
 
-  function newPage() {
+  function pushPage() {
     pages.push(current);
     current = { ops: [] };
     y = PAGE_H - M_TOP;
   }
 
   function setFont(size: number) {
-    // /F1 is Helvetica
     current.ops.push(`/F1 ${size} Tf`);
   }
 
@@ -173,7 +161,6 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
     current.ops.push(`(${pdfStringEscape(text)}) Tj`);
   }
 
-  // Start first page content stream with BT
   function beginText() {
     current.ops.push('BT');
   }
@@ -189,23 +176,16 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
     const size = ln.size ?? defaultFontSize;
     const lh = size + lineGap;
 
-    // If page full, close text block, start new page
     if (y - lh < M_BOTTOM) {
       endText();
-      newPage();
+      pushPage();
       beginText();
       setFont(defaultFontSize);
       moveTo(M_LEFT, y);
     }
 
-    // font size change inline
     setFont(size);
-
-    // crude bold: just slightly larger + same font; no bold font embedding (no deps)
-    const text = ln.text ?? '';
-    show(text);
-
-    // move down
+    show(ln.text ?? '');
     current.ops.push(`0 -${lh.toFixed(2)} Td`);
     y -= lh;
   }
@@ -213,47 +193,35 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
   endText();
   pages.push(current);
 
-  // Build PDF objects
-  // Object 1: Catalog
-  // Object 2: Pages
-  // Object 3..: each Page
-  // Font object
-  // Content stream objects
   const objects: string[] = [];
-
   const offsets: number[] = [];
   const encoder = new TextEncoder();
 
   function addObject(body: string): number {
     objects.push(body);
-    return objects.length; // 1-based object number
+    return objects.length;
   }
 
-  // Reserve IDs
   const catalogId = 1;
   const pagesId = 2;
-
-  // Font object
   const fontId = 3;
 
-  // We'll assign page objects and content objects after we know counts
-  let nextId = 4;
-
-  // Font object body (Helvetica Type1)
   addObject(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`);
 
-  // Page + content objects
+  let nextId = 4;
   const pageIds: number[] = [];
-  const contentIds: number[] = [];
+  const restObjects: string[] = [...objects]; // font first
+
+  // reset objects to build content/page objs after font
+  objects.length = 0;
 
   for (const p of pages) {
     const content = p.ops.join('\n');
     const stream = `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`;
+    objects.push(stream); // content object body
     const contentObjId = nextId++;
-    addObject(stream);
-    contentIds.push(contentObjId);
-
     const pageObjId = nextId++;
+
     const pageObj = `<<
 /Type /Page
 /Parent ${pagesId} 0 R
@@ -261,41 +229,29 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
 /Resources << /Font << /F1 ${fontId} 0 R >> >>
 /Contents ${contentObjId} 0 R
 >>`;
-    addObject(pageObj);
+    objects.push(pageObj);
     pageIds.push(pageObjId);
   }
 
-  // Pages object (must reference all page objects)
   const kids = pageIds.map((id) => `${id} 0 R`).join(' ');
-  // Insert Pages object at index 2 (object number 2). We can build final list by placing later.
-  // For simplicity, we’ll prepend Catalog/Pages after we gather everything:
-  // objects currently: [font, content1, page1, content2, page2, ...]
-  // We’ll rebuild with correct ordering.
-
-  const restObjects = [...objects]; // font + page/content objects
-
   const pagesObj = `<< /Type /Pages /Kids [ ${kids} ] /Count ${pageIds.length} >>`;
   const catalogObj = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
 
-  // Final object list in correct numbering:
-  // 1 catalog, 2 pages, 3 font, 4.. restObjects shift? We already used ids based on nextId with font at 3.
-  // We built restObjects assuming font is obj #1 in that array, but we already fixed fontId=3.
-  // So build finalBodies by explicit mapping:
+  // Final bodies in object-number order:
+  // 1 catalog, 2 pages, 3 font, 4.. content/page alternation
   const finalBodies: string[] = [];
-  finalBodies[0] = catalogObj; // obj 1
-  finalBodies[1] = pagesObj;   // obj 2
-  finalBodies[2] = restObjects[0]; // font -> obj 3
-  for (let i = 1; i < restObjects.length; i++) {
-    finalBodies.push(restObjects[i]);
-  }
+  finalBodies[0] = catalogObj;
+  finalBodies[1] = pagesObj;
+  finalBodies[2] = restObjects[0]; // font
+  for (const b of objects) finalBodies.push(b);
 
-  // Compose PDF
-  let pdf = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
+  let header = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
   const chunks: Uint8Array[] = [];
-  chunks.push(encoder.encode(pdf));
+  const headerBytes = encoder.encode(header);
+  chunks.push(headerBytes);
 
-  let cursor = encoder.encode(pdf).length;
-  offsets.push(0); // xref entry for obj 0
+  let cursor = headerBytes.length;
+  offsets.push(0);
 
   for (let i = 0; i < finalBodies.length; i++) {
     const objNum = i + 1;
@@ -308,19 +264,15 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
 
   const xrefStart = cursor;
   let xref = `xref\n0 ${finalBodies.length + 1}\n`;
-  // obj 0
   xref += `0000000000 65535 f \n`;
   for (let i = 1; i < offsets.length; i++) {
-    const off = offsets[i];
-    xref += `${String(off).padStart(10, '0')} 00000 n \n`;
+    xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
   }
 
   const trailer = `trailer\n<< /Size ${finalBodies.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
-
   chunks.push(encoder.encode(xref));
   chunks.push(encoder.encode(trailer));
 
-  // Concat
   let total = 0;
   for (const c of chunks) total += c.length;
   const out = new Uint8Array(total);
@@ -369,7 +321,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // Build PDF bytes
   const lines = buildPaperLines({
     title: safeText(paper.title, '11+ Exam Paper'),
     subject: safeText(paper.subject, 'Subject'),
@@ -388,16 +339,18 @@ export async function POST(req: Request) {
   const pdfBytes = buildPdfFromLines(lines);
   const filename = `${safeFilename(paper.title)}.pdf`;
 
-const body = pdfBytes.buffer.slice(
-  pdfBytes.byteOffset,
-  pdfBytes.byteOffset + pdfBytes.byteLength
-);
+  // IMPORTANT: pass ArrayBuffer to Response to satisfy TS
+  const body = pdfBytes.buffer.slice(
+    pdfBytes.byteOffset,
+    pdfBytes.byteOffset + pdfBytes.byteLength
+  );
 
-return new Response(body, {
-  status: 200,
-  headers: {
-    'Content-Type': 'application/pdf',
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Cache-Control': 'no-store',
-  },
-});
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+}
