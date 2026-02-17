@@ -327,7 +327,7 @@ function extractOutputText(respJson: any): string {
 }
 
 async function generatePaperWithOpenAI(payload: FormPayload): Promise<ExamPaper> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY || 'YOUR_OPENAI_API_KEY_HERE';
   if (!apiKey) throw new Error('Missing OPENAI_API_KEY env var');
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
