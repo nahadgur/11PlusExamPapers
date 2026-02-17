@@ -1,11 +1,12 @@
-import { Buffer } from 'node:buffer';
 export const runtime = 'nodejs';
+
+import { Buffer } from 'node:buffer';
 
 type ExamQuestion = {
   id?: string | number;
   questionText: string;
   options: string[];
-  correctAnswerIndex?: number; // 0..n
+  correctAnswerIndex?: number;
   explanation?: string;
 };
 
@@ -79,6 +80,7 @@ function buildPaperLines(paper: ExamPaper): Line[] {
   lines.push({ text: `Time Allowed: ${timeAllowed}`, size: 11 });
   lines.push({ text: `Total Questions: ${paper.questions.length}`, size: 11 });
   lines.push({ text: '' });
+
   lines.push({ text: 'Instructions', size: 12, bold: true });
   wrapText(instructions, 92).forEach((t) => lines.push({ text: t, size: 10 }));
   lines.push({ text: '' });
@@ -165,6 +167,7 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
   function beginText() {
     current.ops.push('BT');
   }
+
   function endText() {
     current.ops.push('ET');
   }
@@ -194,34 +197,28 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
   endText();
   pages.push(current);
 
+  const encoder = new TextEncoder();
   const objects: string[] = [];
   const offsets: number[] = [];
-  const encoder = new TextEncoder();
-
-  function addObject(body: string): number {
-    objects.push(body);
-    return objects.length;
-  }
 
   const catalogId = 1;
   const pagesId = 2;
   const fontId = 3;
 
-  addObject(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`);
+  // We will build: 1 Catalog, 2 Pages, 3 Font, then content/page pairs.
+  const fontObj = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`;
 
-  let nextId = 4;
   const pageIds: number[] = [];
-  const restObjects: string[] = [...objects]; // font first
+  const bodiesAfterFont: string[] = [];
 
-  // reset objects to build content/page objs after font
-  objects.length = 0;
+  let nextObjId = 4; // next object number after font
 
   for (const p of pages) {
     const content = p.ops.join('\n');
     const stream = `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream`;
-    objects.push(stream); // content object body
-    const contentObjId = nextId++;
-    const pageObjId = nextId++;
+    bodiesAfterFont.push(stream); // content object body
+    const contentObjId = nextObjId++;
+    const pageObjId = nextObjId++;
 
     const pageObj = `<<
 /Type /Page
@@ -230,7 +227,7 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
 /Resources << /Font << /F1 ${fontId} 0 R >> >>
 /Contents ${contentObjId} 0 R
 >>`;
-    objects.push(pageObj);
+    bodiesAfterFont.push(pageObj);
     pageIds.push(pageObjId);
   }
 
@@ -238,13 +235,12 @@ function buildPdfFromLines(lines: Line[]): Uint8Array {
   const pagesObj = `<< /Type /Pages /Kids [ ${kids} ] /Count ${pageIds.length} >>`;
   const catalogObj = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
 
-  // Final bodies in object-number order:
-  // 1 catalog, 2 pages, 3 font, 4.. content/page alternation
-  const finalBodies: string[] = [];
-  finalBodies[0] = catalogObj;
-  finalBodies[1] = pagesObj;
-  finalBodies[2] = restObjects[0]; // font
-  for (const b of objects) finalBodies.push(b);
+  const finalBodies: string[] = [
+    catalogObj, // 1
+    pagesObj,   // 2
+    fontObj,    // 3
+    ...bodiesAfterFont, // 4+
+  ];
 
   let header = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
   const chunks: Uint8Array[] = [];
@@ -297,6 +293,7 @@ function safeFilename(input: string) {
 
 export async function POST(req: Request) {
   let paper: ExamPaper;
+
   try {
     paper = (await req.json()) as ExamPaper;
   } catch {
@@ -340,14 +337,12 @@ export async function POST(req: Request) {
   const pdfBytes = buildPdfFromLines(lines);
   const filename = `${safeFilename(paper.title)}.pdf`;
 
-  // IMPORTANT: pass ArrayBuffer to Response to satisfy TS
-const body = Buffer.from(pdfBytes);
-
-return new Response(body, {
-  status: 200,
-  headers: {
-    'Content-Type': 'application/pdf',
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Cache-Control': 'no-store',
-  },
-});
+  return new Response(Buffer.from(pdfBytes), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+}
