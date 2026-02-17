@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { SiteNav } from '@/components/SiteNav';
 import { SiteFooter } from '@/components/SiteFooter';
+import ExamPapersClient from './ExamPapersClient';
+
 
 export const metadata: Metadata = {
   title: 'Free 11+ Exam Papers – Download PDF Practice Papers | 11PlusExamPapers.com',
@@ -352,11 +354,8 @@ export default function ExamPapersPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {PAPER_SETS.map((paper) => (
-              <PaperCard key={paper.slug} paper={paper} />
-            ))}
-          </div>
+         <ExamPapersClient paperSets={PAPER_SETS} />
+
         </section>
 
         {/* ── Features ── */}
